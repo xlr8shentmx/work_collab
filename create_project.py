@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 """
-SharePoint Analytics Pipeline - Complete Package
-Extract this file to create the full project structure.
+SharePoint Analytics Pipeline - ZIP File Generator
+
+This script creates a ZIP file containing the complete project structure.
 
 Usage:
-    python create_project.py
+    python create_project_zip.py
 
-This will create the sharepoint_analytics/ directory with all files.
+Output:
+    sharepoint_analytics.zip - Complete project ready to extract
 """
 
-import os
-from pathlib import Path
+import zipfile
+import io
+from datetime import datetime
 
-# Project structure
+# All project files and their contents
 PROJECT_FILES = {
-    # ========== CONFIG FILES ==========
-    "config/__init__.py": "",
+    "sharepoint_analytics/config/__init__.py": "",
     
-    "config/settings.py": '''"""Configuration and constants for the SharePoint Analytics pipeline"""
+    "sharepoint_analytics/config/settings.py": '''"""Configuration and constants for the SharePoint Analytics pipeline"""
 
 from pathlib import Path
 import os
@@ -75,7 +77,7 @@ BOOLEAN_COLUMNS = [
 ]
 ''',
 
-    "config/product_mappings.py": '''"""Product configuration mappings"""
+    "sharepoint_analytics/config/product_mappings.py": '''"""Product configuration mappings"""
 
 # Format: (product_name, category, field, start_col, end_col, status_col)
 PRODUCT_CONFIGS = [
@@ -127,14 +129,13 @@ PRODUCT_CONFIGS = [
 ]
 ''',
 
-    # ========== SRC FILES ==========
-    "src/__init__.py": "",
-    "src/connectors/__init__.py": "",
-    "src/extractors/__init__.py": "",
-    "src/transformers/__init__.py": "",
-    "src/loaders/__init__.py": "",
+    "sharepoint_analytics/src/__init__.py": "",
+    "sharepoint_analytics/src/connectors/__init__.py": "",
+    "sharepoint_analytics/src/extractors/__init__.py": "",
+    "sharepoint_analytics/src/transformers/__init__.py": "",
+    "sharepoint_analytics/src/loaders/__init__.py": "",
 
-    "src/connectors/snowflake_connector.py": '''"""Snowflake database connection management"""
+    "sharepoint_analytics/src/connectors/snowflake_connector.py": '''"""Snowflake database connection management"""
 
 import logging
 import os
@@ -184,7 +185,7 @@ class SnowflakeConnector:
             self._connection = None
 ''',
 
-    "src/extractors/sharepoint_extractor.py": '''"""Extract and load data from SharePoint CSV exports"""
+    "sharepoint_analytics/src/extractors/sharepoint_extractor.py": '''"""Extract and load data from SharePoint CSV exports"""
 
 import pandas as pd
 import logging
@@ -216,7 +217,7 @@ class SharePointExtractor:
         return df
 ''',
 
-    "src/extractors/salesforce_extractor.py": '''"""Extract and load data from Salesforce Excel exports"""
+    "sharepoint_analytics/src/extractors/salesforce_extractor.py": '''"""Extract and load data from Salesforce Excel exports"""
 
 import pandas as pd
 import logging
@@ -267,7 +268,7 @@ class SalesforceExtractor:
         return df
 ''',
 
-    "src/transformers/data_cleaner.py": '''"""Clean and normalize raw SharePoint data"""
+    "sharepoint_analytics/src/transformers/data_cleaner.py": '''"""Clean and normalize raw SharePoint data"""
 
 import pandas as pd
 import logging
@@ -338,7 +339,7 @@ class DataCleaner:
         return df
 ''',
 
-    "src/transformers/product_transformer.py": '''"""Transform cleaned data into product-level records"""
+    "sharepoint_analytics/src/transformers/product_transformer.py": '''"""Transform cleaned data into product-level records"""
 
 import pandas as pd
 import numpy as np
@@ -495,7 +496,7 @@ class ProductTransformer:
         return df.sort_values(by=['ID', 'START_DATE'])
 ''',
 
-    "src/loaders/snowflake_loader.py": '''"""Load data into Snowflake tables"""
+    "sharepoint_analytics/src/loaders/snowflake_loader.py": '''"""Load data into Snowflake tables"""
 
 import pandas as pd
 import logging
@@ -617,44 +618,199 @@ class SnowflakeLoader:
         
         cur.close()
         logger.info(f"Successfully uploaded {nrows} rows")
-        return success, nchunks, nrows")
-            
-            logger.info(f"Uploading Salesforce data to {salesforce_table}...")
-            write_pandas(self.conn, df_salesforce, salesforce_table, 
-                        auto_create_table=True, overwrite=True)
-            
-            logger.info(f"Uploading SharePoint data to {source_table}...")
-            success, nchunks, nrows, _ = write_pandas(self.conn, df_main, source_table)
-            logger.info(f"Upload complete: {nrows} rows")
-            
-            cur.close()
-            return True
-        except Exception as e:
-            logger.error("Error loading raw data", exc_info=True)
-            return False
+        return success, nchunks, nrows
     
-    def load_transformed_data(self, df: pd.DataFrame, target_table: str, 
-                             incremental: bool = True, dry_run: bool = False) -> Tuple[bool, int, int]:
-        """Load transformed data with incremental or full refresh"""
-        try:
-            if dry_run:
-                logger.info("[DRY RUN] Skipping transformed data upload")
-                return True, 0, len(df)
-            
-            if not incremental:
-                return self._full_load(df, target_table)
-            else:
-                return self._incremental_load(df, target_table)
-        except Exception as e:
-            logger.error("Error loading transformed data", exc_info=True)
-            return False, 0, 0
-    
-    def _full_load(self, df: pd.DataFrame, target_table: str) -> Tuple[bool, int, int]:
-        """Full truncate and reload"""
+    def _incremental_load(self, df: pd.DataFrame, target_table: str) -> Tuple[bool, int, int]:
+        """Incremental load using staging table and MERGE"""
         cur = self.conn.cursor()
+        staging_table = f"{target_table}_STAGING"
         
-        logger.info(f"Truncating {target_table} (full reload)...")
-        cur.execute(f"TRUNCATE TABLE {self.database}.{self.schema}.{target_table};")
+        logger.info(f"Creating staging table {staging_table}...")
+        cur.execute(f"""
+            CREATE OR REPLACE TABLE {self.database}.{self.schema}.{staging_table} 
+            LIKE {self.database}.{self.schema}.{target_table};
+        """)
         
-        logger.info(f"Uploading {len(df)} rows to {target_table}...")
-        success, nchunks, nrows, _ = write_pandas(self.conn, df, target_table
+        logger.info(f"Loading {len(df)} rows into staging...")
+        success, nchunks, nrows, _ = write_pandas(self.conn, df, staging_table)
+        
+        if not success:
+            raise Exception("Failed to write to staging table")
+        
+        logger.info("Executing MERGE operation...")
+        merge_sql = self._build_merge_sql(target_table, staging_table)
+        result = cur.execute(merge_sql)
+        
+        # Get merge statistics
+        rows_inserted = result.fetchone()[0] if result.rowcount > 0 else 0
+        
+        logger.info(f"Merge complete: {rows_inserted} rows affected")
+        
+        logger.info("Dropping staging table...")
+        cur.execute(f"DROP TABLE IF EXISTS {self.database}.{self.schema}.{staging_table};")
+        
+        cur.close()
+        return success, nchunks, nrows
+    
+    def _build_merge_sql(self, target_table: str, staging_table: str) -> str:
+        """Build MERGE SQL statement"""
+        return f"""
+        MERGE INTO {self.database}.{self.schema}.{target_table} AS target
+        USING {self.database}.{self.schema}.{staging_table} AS source
+        ON target.ID = source.ID AND target.PRODUCT = source.PRODUCT
+        WHEN MATCHED THEN
+            UPDATE SET
+                target.TITLE = source.TITLE,
+                target.REQUEST_DATE = source.REQUEST_DATE,
+                target.CLIENT = source.CLIENT,
+                target.MARKET = source.MARKET,
+                target.REQUESTOR = source.REQUESTOR,
+                target.CLIENT_TYPE = source.CLIENT_TYPE,
+                target.OVERALL_STATUS = source.OVERALL_STATUS,
+                target.PRODUCTS_REQUESTED = source.PRODUCTS_REQUESTED,
+                target.SALESFORCE_ID = source.SALESFORCE_ID,
+                target.START_DATE = source.START_DATE,
+                target.COMPLETE_DATE = source.COMPLETE_DATE,
+                target.STATUS = source.STATUS,
+                target.STATUS_CHANGE_DATE = source.STATUS_CHANGE_DATE,
+                target.CLOSED_DATE = source.CLOSED_DATE,
+                target.PTRR = source.PTRR,
+                target.PRODUCT_CATEGORY = source.PRODUCT_CATEGORY,
+                target.PRODUCT_TAT = source.PRODUCT_TAT,
+                target.COMPLETED_PRODUCT = source.COMPLETED_PRODUCT,
+                target.REQUEST_TYPE = source.REQUEST_TYPE,
+                target.DAYS_OPEN = source.DAYS_OPEN,
+                target.REQUEST_YEAR = source.REQUEST_YEAR,
+                target.PRODUCT_OPEN = source.PRODUCT_OPEN,
+                target.DAYS_ON_STATUS = source.DAYS_ON_STATUS,
+                target.NEEDS_ATTENTION = source.NEEDS_ATTENTION,
+                target.HAS_VALUE = source.HAS_VALUE,
+                target.URL = source.URL
+        WHEN NOT MATCHED THEN
+            INSERT (
+                ID, TITLE, REQUEST_DATE, CLIENT, MARKET, REQUESTOR,
+                CLIENT_TYPE, OVERALL_STATUS, PRODUCTS_REQUESTED, SALESFORCE_ID,
+                START_DATE, COMPLETE_DATE, STATUS, STATUS_CHANGE_DATE, CLOSED_DATE,
+                PTRR, PRODUCT, PRODUCT_CATEGORY, PRODUCT_TAT, COMPLETED_PRODUCT,
+                REQUEST_TYPE, DAYS_OPEN, REQUEST_YEAR, PRODUCT_OPEN, DAYS_ON_STATUS,
+                NEEDS_ATTENTION, HAS_VALUE, URL
+            )
+            VALUES (
+                source.ID, source.TITLE, source.REQUEST_DATE, source.CLIENT, 
+                source.MARKET, source.REQUESTOR, source.CLIENT_TYPE, 
+                source.OVERALL_STATUS, source.PRODUCTS_REQUESTED, source.SALESFORCE_ID,
+                source.START_DATE, source.COMPLETE_DATE, source.STATUS, 
+                source.STATUS_CHANGE_DATE, source.CLOSED_DATE, source.PTRR, 
+                source.PRODUCT, source.PRODUCT_CATEGORY, source.PRODUCT_TAT, 
+                source.COMPLETED_PRODUCT, source.REQUEST_TYPE, source.DAYS_OPEN, 
+                source.REQUEST_YEAR, source.PRODUCT_OPEN, source.DAYS_ON_STATUS,
+                source.NEEDS_ATTENTION, source.HAS_VALUE, source.URL
+            );
+        """
+''',
+
+    "sharepoint_analytics/src/pipeline.py": '''"""Main pipeline orchestration"""
+
+import logging
+import pandas as pd
+from typing import Tuple
+
+from config.settings import (
+    SNOWFLAKE_CONFIG, SOURCE_TABLE, TARGET_TABLE, SALESFORCE_TABLE,
+    SHAREPOINT_EXPORT_PATH, SALESFORCE_EXPORT_PATH, OPEN_STATUS,
+    DAYS_ON_STATUS_THRESHOLD, CLIENT_TYPE_MAPPING, BOOLEAN_COLUMNS
+)
+from config.product_mappings import PRODUCT_CONFIGS
+from src.connectors.snowflake_connector import SnowflakeConnector
+from src.extractors.sharepoint_extractor import SharePointExtractor
+from src.extractors.salesforce_extractor import SalesforceExtractor
+from src.transformers.data_cleaner import DataCleaner
+from src.transformers.product_transformer import ProductTransformer
+from src.loaders.snowflake_loader import SnowflakeLoader
+
+logger = logging.getLogger(__name__)
+
+
+class SharePointAnalyticsPipeline:
+    """Main pipeline orchestrator"""
+    
+    def __init__(self, sharepoint_path=None, salesforce_path=None):
+        self.sharepoint_path = sharepoint_path or SHAREPOINT_EXPORT_PATH
+        self.salesforce_path = salesforce_path or SALESFORCE_EXPORT_PATH
+        
+        # Initialize components
+        self.sf_connector = SnowflakeConnector(SNOWFLAKE_CONFIG)
+        self.sharepoint_extractor = SharePointExtractor(self.sharepoint_path)
+        self.salesforce_extractor = SalesforceExtractor(self.salesforce_path)
+        self.data_cleaner = DataCleaner(CLIENT_TYPE_MAPPING, BOOLEAN_COLUMNS)
+        self.product_transformer = ProductTransformer(
+            PRODUCT_CONFIGS, OPEN_STATUS, DAYS_ON_STATUS_THRESHOLD
+        )
+    
+    def run(self, dry_run: bool = False, incremental: bool = True) -> Tuple[Tuple[bool, int, int], pd.DataFrame]:
+        """
+        Execute the full pipeline
+        
+        Args:
+            dry_run: If True, skip all Snowflake writes
+            incremental: If True, use MERGE for both raw and transformed tables. If False, truncate and reload both
+        """
+        logger.info("=" * 60)
+        logger.info("Starting SharePoint Analytics Pipeline")
+        logger.info(f"Mode: {'Dry Run' if dry_run else 'Incremental' if incremental else 'Full Reload'}")
+        logger.info("=" * 60)
+        
+        try:
+            # Step 1: Extract data
+            logger.info("Step 1: Extracting data...")
+            df_sharepoint = self.sharepoint_extractor.extract()
+            df_salesforce = self.salesforce_extractor.extract()
+            
+            # Step 2: Clean data
+            logger.info("Step 2: Cleaning data...")
+            df_cleaned = self.data_cleaner.clean(df_sharepoint)
+            
+            # Step 3: Merge with Salesforce
+            logger.info("Step 3: Merging Salesforce data...")
+            df_merged = df_cleaned.merge(df_salesforce, how='left', on='SALESFORCE_ID')
+            
+            # Step 4: Connect to Snowflake
+            logger.info("Step 4: Connecting to Snowflake...")
+            conn = self.sf_connector.connect()
+            loader = SnowflakeLoader(
+                conn, 
+                SNOWFLAKE_CONFIG['database'], 
+                SNOWFLAKE_CONFIG['schema']
+            )
+            
+            # Step 5: Load raw data (incremental or full)
+            logger.info("Step 5: Loading raw data to Snowflake...")
+            loader.load_raw_data(
+                df_merged, df_salesforce, 
+                SOURCE_TABLE, SALESFORCE_TABLE, 
+                incremental=incremental,
+                dry_run=dry_run
+            )
+            
+            # Step 6: Transform data
+            logger.info("Step 6: Transforming data to product records...")
+            df_transformed = self.product_transformer.transform(df_merged)
+            
+            # Step 7: Load transformed data (incremental or full)
+            logger.info("Step 7: Loading transformed data to Snowflake...")
+            result = loader.load_transformed_data(
+                df_transformed, TARGET_TABLE, 
+                incremental=incremental, 
+                dry_run=dry_run
+            )
+            
+            logger.info("=" * 60)
+            logger.info("Pipeline completed successfully")
+            logger.info(f"Total records processed: {len(df_transformed)}")
+            logger.info("=" * 60)
+            
+            return result, df_transformed
+            
+        finally:
+            self.sf_connector.close()
+'''
