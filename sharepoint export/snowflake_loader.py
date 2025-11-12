@@ -72,8 +72,9 @@ class SnowflakeLoader:
 
     def _normalize_date_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Convert datetime columns to date-only format to ensure they map to DATE type in Snowflake.
-        Identifies columns with _DATE suffix and converts them to date objects.
+        Convert datetime columns to datetime64 format to ensure proper handling in Snowflake.
+        Identifies columns with _DATE suffix and converts them to datetime64.
+        Normalizes to midnight (strips time component) while keeping datetime64 dtype.
         """
         df = df.copy()
         date_columns = []
@@ -83,17 +84,17 @@ class SnowflakeLoader:
             if col.endswith('_DATE') or col in ['REQUEST_DATE', 'START_DATE', 'COMPLETE_DATE',
                                                    'CLOSED_DATE', 'STATUS_CHANGE_DATE']:
                 try:
-                    # Try to convert to datetime first (handles strings, floats, etc.)
+                    # Convert to datetime64 (handles strings, floats, etc.)
                     df[col] = pd.to_datetime(df[col], errors='coerce')
-                    # Then convert to date-only (strips time component)
-                    df[col] = df[col].dt.date
+                    # Normalize to midnight (keeps datetime64 dtype, strips time component)
+                    df[col] = df[col].dt.normalize()
                     date_columns.append(col)
-                    logger.debug(f"Converted {col} to date type")
+                    logger.debug(f"Converted {col} to datetime64 type")
                 except Exception as e:
-                    logger.warning(f"Could not convert {col} to date: {e}")
+                    logger.warning(f"Could not convert {col} to datetime: {e}")
 
         if date_columns:
-            logger.info(f"Normalized {len(date_columns)} date columns: {date_columns}")
+            logger.info(f"Normalized {len(date_columns)} date columns to datetime64: {date_columns}")
 
         return df
 
