@@ -69,9 +69,32 @@ class SnowflakeLoader:
 
         cur.close()
         logger.info(f"Schema evolution complete: added {len(new_columns)} columns")
-    
+
+    def _normalize_date_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Convert datetime columns to date-only format to ensure they map to DATE type in Snowflake.
+        Identifies columns with _DATE suffix and converts them to date objects.
+        """
+        df = df.copy()
+        date_columns = []
+
+        for col in df.columns:
+            # Check if column name ends with _DATE or contains DATE-related keywords
+            if col.endswith('_DATE') or col in ['REQUEST_DATE', 'START_DATE', 'COMPLETE_DATE',
+                                                   'CLOSED_DATE', 'STATUS_CHANGE_DATE']:
+                if pd.api.types.is_datetime64_any_dtype(df[col]):
+                    date_columns.append(col)
+                    # Convert datetime to date (strips time component)
+                    df[col] = pd.to_datetime(df[col]).dt.date
+                    logger.debug(f"Converted {col} to date type")
+
+        if date_columns:
+            logger.info(f"Normalized {len(date_columns)} date columns: {date_columns}")
+
+        return df
+
     def load_raw_data(self, df_main: pd.DataFrame, df_salesforce: pd.DataFrame,
-                      source_table: str, salesforce_table: str, 
+                      source_table: str, salesforce_table: str,
                       incremental: bool = True, dry_run: bool = False) -> bool:
         """Load raw data into Snowflake with incremental or full refresh"""
         try:
@@ -98,6 +121,9 @@ class SnowflakeLoader:
             else:
                 # Incremental load with MERGE
                 staging_table = f"{source_table}_STAGING"
+
+                # Normalize date columns before creating staging table
+                df_main = self._normalize_date_columns(df_main)
 
                 logger.info(f"Creating staging table for raw data...")
                 # Drop staging table if it exists
@@ -187,6 +213,9 @@ class SnowflakeLoader:
         """Incremental load using staging table and MERGE"""
         cur = self.conn.cursor()
         staging_table = f"{target_table}_STAGING"
+
+        # Normalize date columns before creating staging table
+        df = self._normalize_date_columns(df)
 
         logger.info(f"Creating staging table {staging_table}...")
         # Drop staging table if it exists
