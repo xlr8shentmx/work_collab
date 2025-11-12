@@ -42,26 +42,29 @@ class SnowflakeLoader:
             else:
                 # Incremental load with MERGE
                 staging_table = f"{source_table}_STAGING"
-                
+
                 logger.info(f"Creating staging table for raw data...")
-                cur.execute(f"""
-                    CREATE OR REPLACE TABLE {self.database}.{self.schema}.{staging_table} 
-                    LIKE {self.database}.{self.schema}.{source_table};
-                """)
-                
+                # Drop staging table if it exists
+                cur.execute(f"DROP TABLE IF EXISTS {self.database}.{self.schema}.{staging_table};")
+
                 logger.info(f"Loading {len(df_main)} rows into staging...")
-                success, nchunks, nrows, _ = write_pandas(self.conn, df_main, staging_table)
-                
+                # Use auto_create_table and overwrite to let write_pandas create the table with correct types
+                success, nchunks, nrows, _ = write_pandas(
+                    self.conn, df_main, staging_table,
+                    auto_create_table=True,
+                    overwrite=True
+                )
+
                 if not success:
                     raise Exception("Failed to write to staging table")
                 
                 logger.info("Merging raw SharePoint data...")
-                
+
                 # Build dynamic MERGE SQL based on DataFrame columns
                 all_columns = df_main.columns.tolist()
                 update_cols = [col for col in all_columns if col != 'ID']
-                
-                update_set_clause = ",\\n                ".join([f"target.{col} = source.{col}" for col in update_cols])
+
+                update_set_clause = ", ".join([f"target.{col} = source.{col}" for col in update_cols])
                 insert_cols = ", ".join(all_columns)
                 insert_vals = ", ".join([f"source.{col}" for col in all_columns])
                 
@@ -124,16 +127,19 @@ class SnowflakeLoader:
         """Incremental load using staging table and MERGE"""
         cur = self.conn.cursor()
         staging_table = f"{target_table}_STAGING"
-        
+
         logger.info(f"Creating staging table {staging_table}...")
-        cur.execute(f"""
-            CREATE OR REPLACE TABLE {self.database}.{self.schema}.{staging_table} 
-            LIKE {self.database}.{self.schema}.{target_table};
-        """)
-        
+        # Drop staging table if it exists
+        cur.execute(f"DROP TABLE IF EXISTS {self.database}.{self.schema}.{staging_table};")
+
         logger.info(f"Loading {len(df)} rows into staging...")
-        success, nchunks, nrows, _ = write_pandas(self.conn, df, staging_table)
-        
+        # Use auto_create_table and overwrite to let write_pandas create the table with correct types
+        success, nchunks, nrows, _ = write_pandas(
+            self.conn, df, staging_table,
+            auto_create_table=True,
+            overwrite=True
+        )
+
         if not success:
             raise Exception("Failed to write to staging table")
         
