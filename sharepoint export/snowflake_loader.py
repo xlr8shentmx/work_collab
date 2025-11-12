@@ -82,11 +82,15 @@ class SnowflakeLoader:
             # Check if column name ends with _DATE or contains DATE-related keywords
             if col.endswith('_DATE') or col in ['REQUEST_DATE', 'START_DATE', 'COMPLETE_DATE',
                                                    'CLOSED_DATE', 'STATUS_CHANGE_DATE']:
-                if pd.api.types.is_datetime64_any_dtype(df[col]):
+                try:
+                    # Try to convert to datetime first (handles strings, floats, etc.)
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                    # Then convert to date-only (strips time component)
+                    df[col] = df[col].dt.date
                     date_columns.append(col)
-                    # Convert datetime to date (strips time component)
-                    df[col] = pd.to_datetime(df[col]).dt.date
                     logger.debug(f"Converted {col} to date type")
+                except Exception as e:
+                    logger.warning(f"Could not convert {col} to date: {e}")
 
         if date_columns:
             logger.info(f"Normalized {len(date_columns)} date columns: {date_columns}")
