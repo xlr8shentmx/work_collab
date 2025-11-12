@@ -1,0 +1,16 @@
+# SharePoint Export Pipeline Requirements
+
+# Data processing
+pandas>=1.5.0
+
+# Excel file support
+openpyxl>=3.0.0
+
+# Snowflake connectivity
+snowflake-connector-python>=3.0.0
+
+# Required for Snowflake pandas integration
+pyarrow>=10.0.0
+
+# Cryptography for key-pair authentication (optional)
+cryptography>=39.0.0
