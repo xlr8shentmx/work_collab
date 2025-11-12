@@ -72,9 +72,9 @@ class SnowflakeLoader:
 
     def _normalize_date_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Convert datetime columns to datetime64 format to ensure proper handling in Snowflake.
-        Identifies columns with _DATE suffix and converts them to datetime64.
-        Normalizes to midnight (strips time component) while keeping datetime64 dtype.
+        Convert datetime columns to string format 'YYYY-MM-DD' for reliable Snowflake DATE parsing.
+        Identifies columns with _DATE suffix and converts them to date strings.
+        Snowflake automatically converts 'YYYY-MM-DD' strings to DATE type.
         """
         df = df.copy()
         date_columns = []
@@ -84,17 +84,19 @@ class SnowflakeLoader:
             if col.endswith('_DATE') or col in ['REQUEST_DATE', 'START_DATE', 'COMPLETE_DATE',
                                                    'CLOSED_DATE', 'STATUS_CHANGE_DATE']:
                 try:
-                    # Convert to datetime64 (handles strings, floats, etc.)
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
-                    # Normalize to midnight (keeps datetime64 dtype, strips time component)
-                    df[col] = df[col].dt.normalize()
+                    # Convert to datetime64 first (handles strings, floats, NaT, etc.)
+                    temp_dt = pd.to_datetime(df[col], errors='coerce')
+                    # Convert to string format 'YYYY-MM-DD' (NaT becomes None/NULL)
+                    df[col] = temp_dt.dt.strftime('%Y-%m-%d')
+                    # Replace 'NaT' strings with None for proper NULL handling
+                    df[col] = df[col].replace('NaT', None)
                     date_columns.append(col)
-                    logger.debug(f"Converted {col} to datetime64 type")
+                    logger.debug(f"Converted {col} to date string format")
                 except Exception as e:
-                    logger.warning(f"Could not convert {col} to datetime: {e}")
+                    logger.warning(f"Could not convert {col} to date string: {e}")
 
         if date_columns:
-            logger.info(f"Normalized {len(date_columns)} date columns to datetime64: {date_columns}")
+            logger.info(f"Normalized {len(date_columns)} date columns to string format: {date_columns}")
 
         return df
 
