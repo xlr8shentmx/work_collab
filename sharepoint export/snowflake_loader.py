@@ -8,11 +8,67 @@ logger = logging.getLogger(__name__)
 
 class SnowflakeLoader:
     """Handles loading data into Snowflake"""
-    
+
     def __init__(self, connection, database: str, schema: str):
         self.conn = connection
         self.database = database
         self.schema = schema
+
+    def _get_table_columns(self, table_name: str) -> list:
+        """Get list of column names from a Snowflake table"""
+        cur = self.conn.cursor()
+        try:
+            result = cur.execute(f"""
+                SELECT COLUMN_NAME
+                FROM {self.database}.INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = '{self.schema}'
+                AND TABLE_NAME = '{table_name}'
+                ORDER BY ORDINAL_POSITION;
+            """)
+            columns = [row[0] for row in result.fetchall()]
+            cur.close()
+            return columns
+        except Exception as e:
+            logger.warning(f"Could not get columns for table {table_name}: {e}")
+            cur.close()
+            return []
+
+    def _add_missing_columns(self, df: pd.DataFrame, target_table: str) -> None:
+        """Add any missing columns from DataFrame to target table"""
+        # Get existing columns in target table
+        existing_columns = self._get_table_columns(target_table)
+
+        if not existing_columns:
+            logger.info(f"Table {target_table} may not exist yet, skipping schema evolution")
+            return
+
+        # Find new columns
+        df_columns = df.columns.tolist()
+        new_columns = [col for col in df_columns if col not in existing_columns]
+
+        if not new_columns:
+            logger.info("No new columns detected")
+            return
+
+        # Add new columns to target table
+        cur = self.conn.cursor()
+        logger.info(f"Detected {len(new_columns)} new columns: {new_columns}")
+
+        for col in new_columns:
+            try:
+                # Use VARCHAR for new columns (can be adjusted based on dtype if needed)
+                logger.info(f"Adding column {col} to {target_table}...")
+                cur.execute(f"""
+                    ALTER TABLE {self.database}.{self.schema}.{target_table}
+                    ADD COLUMN {col} VARCHAR;
+                """)
+                logger.info(f"Successfully added column {col}")
+            except Exception as e:
+                logger.error(f"Error adding column {col}: {e}")
+                raise
+
+        cur.close()
+        logger.info(f"Schema evolution complete: added {len(new_columns)} columns")
     
     def load_raw_data(self, df_main: pd.DataFrame, df_salesforce: pd.DataFrame,
                       source_table: str, salesforce_table: str, 
@@ -57,7 +113,11 @@ class SnowflakeLoader:
 
                 if not success:
                     raise Exception("Failed to write to staging table")
-                
+
+                # Add any new columns to target table before MERGE
+                logger.info("Checking for schema changes...")
+                self._add_missing_columns(df_main, source_table)
+
                 logger.info("Merging raw SharePoint data...")
 
                 # Build dynamic MERGE SQL based on DataFrame columns
@@ -142,7 +202,11 @@ class SnowflakeLoader:
 
         if not success:
             raise Exception("Failed to write to staging table")
-        
+
+        # Add any new columns to target table before MERGE
+        logger.info("Checking for schema changes...")
+        self._add_missing_columns(df, target_table)
+
         logger.info("Executing MERGE operation...")
         merge_sql = self._build_merge_sql(target_table, staging_table)
         result = cur.execute(merge_sql)
