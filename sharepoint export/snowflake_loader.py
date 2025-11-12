@@ -56,12 +56,12 @@ class SnowflakeLoader:
                     raise Exception("Failed to write to staging table")
                 
                 logger.info("Merging raw SharePoint data...")
-                
+
                 # Build dynamic MERGE SQL based on DataFrame columns
                 all_columns = df_main.columns.tolist()
                 update_cols = [col for col in all_columns if col != 'ID']
-                
-                update_set_clause = ",\\n                ".join([f"target.{col} = source.{col}" for col in update_cols])
+
+                update_set_clause = ", ".join([f"target.{col} = source.{col}" for col in update_cols])
                 insert_cols = ", ".join(all_columns)
                 insert_vals = ", ".join([f"source.{col}" for col in all_columns])
                 
