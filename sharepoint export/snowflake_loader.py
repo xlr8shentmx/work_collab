@@ -86,10 +86,14 @@ class SnowflakeLoader:
                 try:
                     # Convert to datetime64 first (handles strings, floats, NaT, etc.)
                     temp_dt = pd.to_datetime(df[col], errors='coerce')
-                    # Convert to string format 'YYYY-MM-DD' (NaT becomes None/NULL)
-                    df[col] = temp_dt.dt.strftime('%Y-%m-%d')
-                    # Replace 'NaT' strings with None for proper NULL handling
-                    df[col] = df[col].replace('NaT', None)
+
+                    # Convert to string format 'YYYY-MM-DD', keeping NaT as None
+                    # Use apply to handle NaT values properly
+                    df[col] = temp_dt.apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else None)
+
+                    # Explicitly cast to object dtype to ensure write_pandas treats as VARCHAR
+                    df[col] = df[col].astype('object')
+
                     date_columns.append(col)
                     logger.debug(f"Converted {col} to date string format")
                 except Exception as e:
