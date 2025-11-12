@@ -8,14 +8,97 @@ logger = logging.getLogger(__name__)
 
 class SnowflakeLoader:
     """Handles loading data into Snowflake"""
-    
+
     def __init__(self, connection, database: str, schema: str):
         self.conn = connection
         self.database = database
         self.schema = schema
-    
+
+    def _get_table_columns(self, table_name: str) -> list:
+        """Get list of column names from a Snowflake table"""
+        cur = self.conn.cursor()
+        try:
+            result = cur.execute(f"""
+                SELECT COLUMN_NAME
+                FROM {self.database}.INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = '{self.schema}'
+                AND TABLE_NAME = '{table_name}'
+                ORDER BY ORDINAL_POSITION;
+            """)
+            columns = [row[0] for row in result.fetchall()]
+            cur.close()
+            return columns
+        except Exception as e:
+            logger.warning(f"Could not get columns for table {table_name}: {e}")
+            cur.close()
+            return []
+
+    def _add_missing_columns(self, df: pd.DataFrame, target_table: str) -> None:
+        """Add any missing columns from DataFrame to target table"""
+        # Get existing columns in target table
+        existing_columns = self._get_table_columns(target_table)
+
+        if not existing_columns:
+            logger.info(f"Table {target_table} may not exist yet, skipping schema evolution")
+            return
+
+        # Find new columns
+        df_columns = df.columns.tolist()
+        new_columns = [col for col in df_columns if col not in existing_columns]
+
+        if not new_columns:
+            logger.info("No new columns detected")
+            return
+
+        # Add new columns to target table
+        cur = self.conn.cursor()
+        logger.info(f"Detected {len(new_columns)} new columns: {new_columns}")
+
+        for col in new_columns:
+            try:
+                # Use VARCHAR for new columns (can be adjusted based on dtype if needed)
+                logger.info(f"Adding column {col} to {target_table}...")
+                cur.execute(f"""
+                    ALTER TABLE {self.database}.{self.schema}.{target_table}
+                    ADD COLUMN {col} VARCHAR;
+                """)
+                logger.info(f"Successfully added column {col}")
+            except Exception as e:
+                logger.error(f"Error adding column {col}: {e}")
+                raise
+
+        cur.close()
+        logger.info(f"Schema evolution complete: added {len(new_columns)} columns")
+
+    def _normalize_date_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Convert datetime columns to date-only format to ensure they map to DATE type in Snowflake.
+        Identifies columns with _DATE suffix and converts them to date objects.
+        """
+        df = df.copy()
+        date_columns = []
+
+        for col in df.columns:
+            # Check if column name ends with _DATE or contains DATE-related keywords
+            if col.endswith('_DATE') or col in ['REQUEST_DATE', 'START_DATE', 'COMPLETE_DATE',
+                                                   'CLOSED_DATE', 'STATUS_CHANGE_DATE']:
+                try:
+                    # Try to convert to datetime first (handles strings, floats, etc.)
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                    # Then convert to date-only (strips time component)
+                    df[col] = df[col].dt.date
+                    date_columns.append(col)
+                    logger.debug(f"Converted {col} to date type")
+                except Exception as e:
+                    logger.warning(f"Could not convert {col} to date: {e}")
+
+        if date_columns:
+            logger.info(f"Normalized {len(date_columns)} date columns: {date_columns}")
+
+        return df
+
     def load_raw_data(self, df_main: pd.DataFrame, df_salesforce: pd.DataFrame,
-                      source_table: str, salesforce_table: str, 
+                      source_table: str, salesforce_table: str,
                       incremental: bool = True, dry_run: bool = False) -> bool:
         """Load raw data into Snowflake with incremental or full refresh"""
         try:
@@ -43,6 +126,9 @@ class SnowflakeLoader:
                 # Incremental load with MERGE
                 staging_table = f"{source_table}_STAGING"
 
+                # Normalize date columns before creating staging table
+                df_main = self._normalize_date_columns(df_main)
+
                 logger.info(f"Creating staging table for raw data...")
                 # Drop staging table if it exists
                 cur.execute(f"DROP TABLE IF EXISTS {self.database}.{self.schema}.{staging_table};")
@@ -57,7 +143,11 @@ class SnowflakeLoader:
 
                 if not success:
                     raise Exception("Failed to write to staging table")
-                
+
+                # Add any new columns to target table before MERGE
+                logger.info("Checking for schema changes...")
+                self._add_missing_columns(df_main, source_table)
+
                 logger.info("Merging raw SharePoint data...")
 
                 # Build dynamic MERGE SQL based on DataFrame columns
@@ -128,6 +218,9 @@ class SnowflakeLoader:
         cur = self.conn.cursor()
         staging_table = f"{target_table}_STAGING"
 
+        # Normalize date columns before creating staging table
+        df = self._normalize_date_columns(df)
+
         logger.info(f"Creating staging table {staging_table}...")
         # Drop staging table if it exists
         cur.execute(f"DROP TABLE IF EXISTS {self.database}.{self.schema}.{staging_table};")
@@ -142,7 +235,11 @@ class SnowflakeLoader:
 
         if not success:
             raise Exception("Failed to write to staging table")
-        
+
+        # Add any new columns to target table before MERGE
+        logger.info("Checking for schema changes...")
+        self._add_missing_columns(df, target_table)
+
         logger.info("Executing MERGE operation...")
         merge_sql = self._build_merge_sql(target_table, staging_table)
         result = cur.execute(merge_sql)
