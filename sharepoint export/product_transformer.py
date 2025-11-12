@@ -1,67 +1,135 @@
 import pandas as pd
 import logging
-from typing import Dict, List
+from datetime import datetime
+from typing import List, Tuple
+from product_mappings import PRODUCT_CONFIGS
 
 logger = logging.getLogger(__name__)
 
 
-class DataCleaner:
-    """Cleans and normalizes raw data"""
-    
-    def __init__(self, client_type_mapping: Dict, boolean_columns: List[str]):
-        self.client_type_mapping = client_type_mapping
-        self.boolean_columns = boolean_columns
-    
-    def clean(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Apply all cleaning transformations"""
-        logger.info("Cleaning and normalizing data...")
-        
-        df = self._map_client_types(df)
-        df = self._detect_spine_pain_joint(df)
-        df = self._normalize_boolean_columns(df)
-        df = self._populate_products_requested(df)
-        
-        logger.info("Data cleaning complete")
-        return df
-    
-    def _map_client_types(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Map client type codes to descriptions"""
-        df['CLIENT_TYPE_DETAIL'] = (
-            df['CLIENT_TYPE_DETAIL']
-            .astype(str)
-            .map(self.client_type_mapping)
-            .fillna(df['CLIENT_TYPE_DETAIL'])
-        )
-        return df
-    
-    def _detect_spine_pain_joint(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Detect Spine Pain & Joint from product text"""
-        df['SPINE_PAIN_JOINT'] = df['PRODUCTS_REQUESTED'].str.contains(
-            "Spine Pain & Joint", case=False, na=False
-        )
-        return df
-    
-    def _normalize_boolean_columns(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Fill null values in boolean columns"""
-        df[self.boolean_columns] = df[self.boolean_columns].fillna(False)
-        return df
-    
-    def _populate_products_requested(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Populate PRODUCTS_REQUESTED from boolean columns where null"""
-        mask_null = df['PRODUCTS_REQUESTED'].isnull()
-        
-        if not mask_null.any():
+class ProductTransformer:
+    """Transforms SharePoint requests into product-level records"""
+
+    def __init__(self, open_status: List[str], days_threshold: int):
+        self.open_status = open_status
+        self.days_threshold = days_threshold
+
+    def transform(self, df: pd.DataFrame, df_salesforce: pd.DataFrame) -> pd.DataFrame:
+        """Transform wide-format data into product-level records"""
+        logger.info("Starting product transformation...")
+
+        # Explode products into separate rows
+        df_exploded = self._explode_products(df)
+
+        # Enrich with Salesforce data
+        df_enriched = self._enrich_with_salesforce(df_exploded, df_salesforce)
+
+        # Calculate metrics
+        df_enriched = self._calculate_metrics(df_enriched)
+
+        logger.info(f"Transformation complete: {len(df_exploded)} product-level records created")
+        return df_enriched
+
+    def _explode_products(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Explode wide-format data into product-level records"""
+        records = []
+
+        for _, row in df.iterrows():
+            for product_name, category, field, start_col, end_col, status_col in PRODUCT_CONFIGS:
+                # Check if this product is requested
+                if field in row.index and row[field]:
+                    record = {
+                        'ID': row.get('ID'),
+                        'TITLE': row.get('TITLE'),
+                        'REQUEST_DATE': row.get('REQUEST_DATE'),
+                        'CLIENT': row.get('CLIENT'),
+                        'MARKET': row.get('MARKET'),
+                        'REQUESTOR': row.get('REQUESTOR'),
+                        'CLIENT_TYPE': row.get('CLIENT_TYPE_DETAIL'),
+                        'OVERALL_STATUS': row.get('OVERALL_STATUS'),
+                        'PRODUCTS_REQUESTED': row.get('PRODUCTS_REQUESTED'),
+                        'SALESFORCE_ID': row.get('SALESFORCE_ID'),
+                        'PRODUCT': product_name,
+                        'PRODUCT_CATEGORY': category,
+                        'START_DATE': row.get(start_col),
+                        'COMPLETE_DATE': row.get(end_col),
+                        'STATUS': row.get(status_col),
+                        'STATUS_CHANGE_DATE': row.get('STATUS_CHANGE_DATE'),
+                        'CLOSED_DATE': row.get('CLOSED_DATE'),
+                        'PTRR': row.get('PTRR')
+                    }
+                    records.append(record)
+
+        df_products = pd.DataFrame(records)
+        logger.info(f"Exploded {len(df)} requests into {len(df_products)} product records")
+        return df_products
+
+    def _enrich_with_salesforce(self, df: pd.DataFrame, df_salesforce: pd.DataFrame) -> pd.DataFrame:
+        """Join with Salesforce data to enrich records"""
+        if df_salesforce is None or df_salesforce.empty:
+            logger.warning("No Salesforce data available for enrichment")
             return df
-        
-        bool_array = df.loc[mask_null, self.boolean_columns].values
-        products_list = []
-        
-        for row_vals in bool_array:
-            if row_vals.any():
-                selected_cols = df.loc[mask_null, self.boolean_columns].columns[row_vals]
-                products_list.append(', '.join(selected_cols.str.title()))
-            else:
-                products_list.append('None')
-        
-        df.loc[mask_null, 'PRODUCTS_REQUESTED'] = products_list
+
+        # Normalize Salesforce column names
+        df_salesforce.columns = df_salesforce.columns.str.upper()
+
+        # Merge on SALESFORCE_ID if available
+        if 'SALESFORCE_ID' in df.columns and 'SALESFORCE_ID' in df_salesforce.columns:
+            df = df.merge(
+                df_salesforce[['SALESFORCE_ID', 'HAS_VALUE']],
+                on='SALESFORCE_ID',
+                how='left'
+            )
+            logger.info("Enriched with Salesforce data")
+
+        return df
+
+    def _calculate_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate derived metrics"""
+        today = pd.Timestamp.now()
+
+        # Convert date columns to datetime
+        date_columns = ['REQUEST_DATE', 'START_DATE', 'COMPLETE_DATE',
+                       'STATUS_CHANGE_DATE', 'CLOSED_DATE']
+        for col in date_columns:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors='coerce')
+
+        # Calculate days open
+        df['DAYS_OPEN'] = (today - df['REQUEST_DATE']).dt.days
+
+        # Calculate product TAT (turnaround time)
+        df['PRODUCT_TAT'] = (df['COMPLETE_DATE'] - df['START_DATE']).dt.days
+
+        # Mark completed products
+        df['COMPLETED_PRODUCT'] = df['STATUS'].isin(['Complete', 'Completed'])
+
+        # Extract request type and year
+        df['REQUEST_TYPE'] = df['TITLE'].str.extract(r'\[(.*?)\]')[0]
+        df['REQUEST_YEAR'] = df['REQUEST_DATE'].dt.year
+
+        # Determine if product is open
+        df['PRODUCT_OPEN'] = df['STATUS'].isin(self.open_status)
+
+        # Calculate days on current status
+        df['DAYS_ON_STATUS'] = (today - df['STATUS_CHANGE_DATE']).dt.days
+        df['DAYS_ON_STATUS'] = df['DAYS_ON_STATUS'].fillna(0).astype(int)
+
+        # Flag items needing attention (open and on status > threshold)
+        df['NEEDS_ATTENTION'] = (
+            df['PRODUCT_OPEN'] &
+            (df['DAYS_ON_STATUS'] > self.days_threshold)
+        )
+
+        # Add HAS_VALUE if not present
+        if 'HAS_VALUE' not in df.columns:
+            df['HAS_VALUE'] = None
+
+        # Generate SharePoint URL
+        df['URL'] = df['ID'].apply(
+            lambda x: f"https://sharepoint.com/sites/analytics/Lists/Requests/DispForm.aspx?ID={x}"
+            if pd.notna(x) else None
+        )
+
+        logger.info("Calculated all metrics")
         return df
