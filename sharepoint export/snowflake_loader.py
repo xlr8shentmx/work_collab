@@ -314,32 +314,46 @@ class SnowflakeLoader:
             logger.error("Error loading raw data", exc_info=True)
             return False
     
-    def load_transformed_data(self, df: pd.DataFrame, target_table: str, 
+    def load_transformed_data(self, df: pd.DataFrame, target_table: str,
                              incremental: bool = True, dry_run: bool = False) -> Tuple[bool, int, int]:
-        """Load transformed data with incremental or full refresh"""
+        """
+        Load transformed data with full refresh (incremental option ignored).
+        Transformed tables are always fully reloaded to ensure consistency with raw data.
+        """
         try:
             if dry_run:
                 logger.info("[DRY RUN] Skipping transformed data upload")
                 return True, 0, len(df)
-            
-            if not incremental:
-                return self._full_load(df, target_table)
-            else:
-                return self._incremental_load(df, target_table)
+
+            # Always do full load for transformed data
+            logger.info("Loading transformed data with FULL REFRESH (ensures consistency with raw table)")
+            return self._full_load(df, target_table)
         except Exception as e:
             logger.error("Error loading transformed data", exc_info=True)
             return False, 0, 0
     
     def _full_load(self, df: pd.DataFrame, target_table: str) -> Tuple[bool, int, int]:
-        """Full truncate and reload"""
+        """Full truncate and reload with explicit DATE column types"""
         cur = self.conn.cursor()
-        
+
+        # Normalize date columns
+        df, date_columns = self._normalize_date_columns(df)
+
+        # Ensure table exists with proper DATE column types
+        logger.info(f"Ensuring target table {target_table} exists with proper schema...")
+        self._create_table_with_date_columns(target_table, df, date_columns)
+
         logger.info(f"Truncating {target_table} (full reload)...")
         cur.execute(f"TRUNCATE TABLE {self.database}.{self.schema}.{target_table};")
-        
+
         logger.info(f"Uploading {len(df)} rows to {target_table}...")
-        success, nchunks, nrows, _ = write_pandas(self.conn, df, target_table)
-        
+        # Load data into pre-created table
+        success, nchunks, nrows, _ = write_pandas(
+            self.conn, df, target_table,
+            auto_create_table=False,
+            overwrite=False
+        )
+
         cur.close()
         logger.info(f"Successfully uploaded {nrows} rows")
         return success, nchunks, nrows
