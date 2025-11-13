@@ -70,11 +70,82 @@ class SnowflakeLoader:
         cur.close()
         logger.info(f"Schema evolution complete: added {len(new_columns)} columns")
 
-    def _normalize_date_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _ensure_date_column_types(self, table_name: str, date_columns: list) -> None:
+        """
+        Ensure date columns in target table have DATE type.
+        Converts VARCHAR date columns to DATE type if needed.
+        """
+        if not date_columns:
+            return
+
+        cur = self.conn.cursor()
+
+        try:
+            # Get current column types
+            result = cur.execute(f"""
+                SELECT COLUMN_NAME, DATA_TYPE
+                FROM {self.database}.INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = '{self.schema}'
+                AND TABLE_NAME = '{table_name}';
+            """)
+
+            current_types = {row[0]: row[1] for row in result.fetchall()}
+
+            # Find date columns that aren't DATE type
+            for col in date_columns:
+                if col in current_types and current_types[col] != 'DATE':
+                    logger.info(f"Converting column {col} from {current_types[col]} to DATE type...")
+                    try:
+                        # Create new DATE column
+                        cur.execute(f"""
+                            ALTER TABLE {self.database}.{self.schema}.{table_name}
+                            ADD COLUMN {col}_TEMP DATE;
+                        """)
+
+                        # Copy data with conversion
+                        cur.execute(f"""
+                            UPDATE {self.database}.{self.schema}.{table_name}
+                            SET {col}_TEMP = TRY_TO_DATE({col}, 'YYYY-MM-DD');
+                        """)
+
+                        # Drop old column
+                        cur.execute(f"""
+                            ALTER TABLE {self.database}.{self.schema}.{table_name}
+                            DROP COLUMN {col};
+                        """)
+
+                        # Rename new column
+                        cur.execute(f"""
+                            ALTER TABLE {self.database}.{self.schema}.{table_name}
+                            RENAME COLUMN {col}_TEMP TO {col};
+                        """)
+
+                        logger.info(f"Successfully converted {col} to DATE type")
+                    except Exception as e:
+                        logger.error(f"Error converting {col} to DATE: {e}")
+                        # Try to clean up temp column if it exists
+                        try:
+                            cur.execute(f"""
+                                ALTER TABLE {self.database}.{self.schema}.{table_name}
+                                DROP COLUMN IF EXISTS {col}_TEMP;
+                            """)
+                        except:
+                            pass
+
+            cur.close()
+
+        except Exception as e:
+            logger.error(f"Error ensuring date column types: {e}")
+            cur.close()
+
+    def _normalize_date_columns(self, df: pd.DataFrame) -> tuple:
         """
         Convert datetime columns to string format 'YYYY-MM-DD' for reliable Snowflake DATE parsing.
         Identifies columns with _DATE suffix and converts them to date strings.
         Snowflake automatically converts 'YYYY-MM-DD' strings to DATE type.
+
+        Returns:
+            tuple: (normalized_dataframe, list_of_date_columns)
         """
         df = df.copy()
         date_columns = []
@@ -102,7 +173,7 @@ class SnowflakeLoader:
         if date_columns:
             logger.info(f"Normalized {len(date_columns)} date columns to string format: {date_columns}")
 
-        return df
+        return df, date_columns
 
     def load_raw_data(self, df_main: pd.DataFrame, df_salesforce: pd.DataFrame,
                       source_table: str, salesforce_table: str,
@@ -134,7 +205,7 @@ class SnowflakeLoader:
                 staging_table = f"{source_table}_STAGING"
 
                 # Normalize date columns before creating staging table
-                df_main = self._normalize_date_columns(df_main)
+                df_main, date_columns = self._normalize_date_columns(df_main)
 
                 logger.info(f"Creating staging table for raw data...")
                 # Drop staging table if it exists
@@ -154,6 +225,10 @@ class SnowflakeLoader:
                 # Add any new columns to target table before MERGE
                 logger.info("Checking for schema changes...")
                 self._add_missing_columns(df_main, source_table)
+
+                # Ensure date columns have proper DATE type in target table
+                logger.info("Ensuring DATE column types in target table...")
+                self._ensure_date_column_types(source_table, date_columns)
 
                 logger.info("Merging raw SharePoint data...")
 
@@ -226,7 +301,7 @@ class SnowflakeLoader:
         staging_table = f"{target_table}_STAGING"
 
         # Normalize date columns before creating staging table
-        df = self._normalize_date_columns(df)
+        df, date_columns = self._normalize_date_columns(df)
 
         logger.info(f"Creating staging table {staging_table}...")
         # Drop staging table if it exists
@@ -246,6 +321,10 @@ class SnowflakeLoader:
         # Add any new columns to target table before MERGE
         logger.info("Checking for schema changes...")
         self._add_missing_columns(df, target_table)
+
+        # Ensure date columns have proper DATE type in target table
+        logger.info("Ensuring DATE column types in target table...")
+        self._ensure_date_column_types(target_table, date_columns)
 
         logger.info("Executing MERGE operation...")
         merge_sql = self._build_merge_sql(target_table, staging_table)
