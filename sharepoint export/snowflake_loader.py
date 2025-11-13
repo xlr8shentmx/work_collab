@@ -96,47 +96,93 @@ class SnowflakeLoader:
                 if col in current_types and current_types[col] != 'DATE':
                     logger.info(f"Converting column {col} from {current_types[col]} to DATE type...")
                     try:
-                        # Create new DATE column
+                        # Use ALTER TABLE to change column type directly
+                        # This is safer than drop/recreate approach
                         cur.execute(f"""
                             ALTER TABLE {self.database}.{self.schema}.{table_name}
-                            ADD COLUMN {col}_TEMP DATE;
-                        """)
-
-                        # Copy data with conversion
-                        cur.execute(f"""
-                            UPDATE {self.database}.{self.schema}.{table_name}
-                            SET {col}_TEMP = TRY_TO_DATE({col}, 'YYYY-MM-DD');
-                        """)
-
-                        # Drop old column
-                        cur.execute(f"""
-                            ALTER TABLE {self.database}.{self.schema}.{table_name}
-                            DROP COLUMN {col};
-                        """)
-
-                        # Rename new column
-                        cur.execute(f"""
-                            ALTER TABLE {self.database}.{self.schema}.{table_name}
-                            RENAME COLUMN {col}_TEMP TO {col};
+                            ALTER COLUMN {col} SET DATA TYPE DATE;
                         """)
 
                         logger.info(f"Successfully converted {col} to DATE type")
                     except Exception as e:
-                        logger.error(f"Error converting {col} to DATE: {e}")
-                        # Try to clean up temp column if it exists
+                        logger.warning(f"Direct ALTER failed for {col}, trying conversion approach: {e}")
                         try:
+                            # Fallback: Create temp column, convert, swap
                             cur.execute(f"""
                                 ALTER TABLE {self.database}.{self.schema}.{table_name}
-                                DROP COLUMN IF EXISTS {col}_TEMP;
+                                ADD COLUMN {col}_TEMP DATE;
                             """)
-                        except:
-                            pass
+
+                            # Copy data with conversion
+                            cur.execute(f"""
+                                UPDATE {self.database}.{self.schema}.{table_name}
+                                SET {col}_TEMP = TRY_TO_DATE({col}, 'YYYY-MM-DD');
+                            """)
+
+                            # Drop old column
+                            cur.execute(f"""
+                                ALTER TABLE {self.database}.{self.schema}.{table_name}
+                                DROP COLUMN {col};
+                            """)
+
+                            # Rename new column
+                            cur.execute(f"""
+                                ALTER TABLE {self.database}.{self.schema}.{table_name}
+                                RENAME COLUMN {col}_TEMP TO {col};
+                            """)
+
+                            logger.info(f"Successfully converted {col} to DATE type using fallback method")
+                        except Exception as e2:
+                            logger.error(f"Error converting {col} to DATE: {e2}")
+                            # Try to clean up temp column if it exists
+                            try:
+                                cur.execute(f"""
+                                    ALTER TABLE {self.database}.{self.schema}.{table_name}
+                                    DROP COLUMN IF EXISTS {col}_TEMP;
+                                """)
+                            except:
+                                pass
 
             cur.close()
 
         except Exception as e:
             logger.error(f"Error ensuring date column types: {e}")
             cur.close()
+
+    def _create_table_with_date_columns(self, table_name: str, df: pd.DataFrame, date_columns: list) -> None:
+        """
+        Create table with explicit DATE column types for date columns.
+        All other columns created as VARCHAR for flexibility.
+        """
+        cur = self.conn.cursor()
+
+        # Build column definitions
+        column_defs = []
+        for col in df.columns:
+            if col in date_columns:
+                column_defs.append(f"{col} DATE")
+            else:
+                # Use VARCHAR for all other columns - will auto-convert on load
+                column_defs.append(f"{col} VARCHAR")
+
+        columns_sql = ",\n    ".join(column_defs)
+
+        create_sql = f"""
+        CREATE TABLE IF NOT EXISTS {self.database}.{self.schema}.{table_name} (
+            {columns_sql}
+        );
+        """
+
+        logger.info(f"Creating table {table_name} with {len(date_columns)} DATE columns...")
+        logger.debug(f"CREATE TABLE SQL: {create_sql}")
+
+        try:
+            cur.execute(create_sql)
+            logger.info(f"Successfully created table {table_name}")
+        except Exception as e:
+            logger.warning(f"Table creation failed (may already exist): {e}")
+
+        cur.close()
 
     def _normalize_date_columns(self, df: pd.DataFrame) -> tuple:
         """
@@ -207,28 +253,31 @@ class SnowflakeLoader:
                 # Normalize date columns before creating staging table
                 df_main, date_columns = self._normalize_date_columns(df_main)
 
+                # Ensure target table exists with proper DATE column types
+                logger.info(f"Ensuring target table {source_table} exists with proper schema...")
+                self._create_table_with_date_columns(source_table, df_main, date_columns)
+
                 logger.info(f"Creating staging table for raw data...")
                 # Drop staging table if it exists
                 cur.execute(f"DROP TABLE IF EXISTS {self.database}.{self.schema}.{staging_table};")
 
+                # Create staging table with same schema as target (including DATE columns)
+                self._create_table_with_date_columns(staging_table, df_main, date_columns)
+
                 logger.info(f"Loading {len(df_main)} rows into staging...")
-                # Use auto_create_table and overwrite to let write_pandas create the table with correct types
+                # Load data into pre-created table (auto_create_table=False)
                 success, nchunks, nrows, _ = write_pandas(
                     self.conn, df_main, staging_table,
-                    auto_create_table=True,
-                    overwrite=True
+                    auto_create_table=False,
+                    overwrite=False
                 )
 
                 if not success:
                     raise Exception("Failed to write to staging table")
 
-                # Add any new columns to target table before MERGE
+                # Add any new columns to target table before MERGE (for schema evolution)
                 logger.info("Checking for schema changes...")
                 self._add_missing_columns(df_main, source_table)
-
-                # Ensure date columns have proper DATE type in target table
-                logger.info("Ensuring DATE column types in target table...")
-                self._ensure_date_column_types(source_table, date_columns)
 
                 logger.info("Merging raw SharePoint data...")
 
@@ -303,28 +352,31 @@ class SnowflakeLoader:
         # Normalize date columns before creating staging table
         df, date_columns = self._normalize_date_columns(df)
 
+        # Ensure target table exists with proper DATE column types
+        logger.info(f"Ensuring target table {target_table} exists with proper schema...")
+        self._create_table_with_date_columns(target_table, df, date_columns)
+
         logger.info(f"Creating staging table {staging_table}...")
         # Drop staging table if it exists
         cur.execute(f"DROP TABLE IF EXISTS {self.database}.{self.schema}.{staging_table};")
 
+        # Create staging table with same schema as target (including DATE columns)
+        self._create_table_with_date_columns(staging_table, df, date_columns)
+
         logger.info(f"Loading {len(df)} rows into staging...")
-        # Use auto_create_table and overwrite to let write_pandas create the table with correct types
+        # Load data into pre-created table (auto_create_table=False)
         success, nchunks, nrows, _ = write_pandas(
             self.conn, df, staging_table,
-            auto_create_table=True,
-            overwrite=True
+            auto_create_table=False,
+            overwrite=False
         )
 
         if not success:
             raise Exception("Failed to write to staging table")
 
-        # Add any new columns to target table before MERGE
+        # Add any new columns to target table before MERGE (for schema evolution)
         logger.info("Checking for schema changes...")
         self._add_missing_columns(df, target_table)
-
-        # Ensure date columns have proper DATE type in target table
-        logger.info("Ensuring DATE column types in target table...")
-        self._ensure_date_column_types(target_table, date_columns)
 
         logger.info("Executing MERGE operation...")
         merge_sql = self._build_merge_sql(target_table, staging_table)
