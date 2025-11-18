@@ -1,0 +1,14 @@
+# NICU Analytics Pipeline Requirements
+
+# Snowflake Snowpark for data processing
+snowflake-snowpark-python>=1.34.0
+
+# Cryptography for Snowflake private key authentication
+cryptography>=3.4.8
+
+# Data manipulation
+pandas>=1.5.0
+numpy>=1.23.0
+
+# Date utilities
+python-dateutil>=2.8.2
