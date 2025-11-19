@@ -784,8 +784,8 @@ def build_nicu_rollup(
     out = (
         base
         .join(all_prof.select(*keys, "ALL_PROFFEE"), keys, "left")
-        .join(man_aggs.select(*keys, "MANAGEABLE_PROFFEE"), keys, "left")
-        .join(crit_aggs.select(*keys, "CRITICAL_CARE_PROFFEE"), keys, "left")
+        .join(man_aggs.select(*keys, "MANAGEABLE_PROFFEE", "MANAGEABLE_SVC_DAYS"), keys, "left")
+        .join(crit_aggs.select(*keys, "CRITICAL_CARE_PROFFEE", "CRITICAL_CARE_DAYS"), keys, "left")
         .join(room.select(*keys, "FACILITY_RM_COST"), keys, "left")
         .join(readm.select(*keys, "READMIT", "READMIT_PAID_AMT", "READMIT_LOS"), keys, "left")
         .join(nas.select(*keys, "NAS"), keys, "left")
