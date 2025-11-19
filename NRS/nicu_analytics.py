@@ -255,7 +255,7 @@ def build_newborn_and_nicu_ids(
         "AMTPAID", "CPTCODE", "REV_CD", "DRG",
         "DIAG1", "DIAG2", "DIAG3", "DIAG4", "DIAG5",
         "PROC1", "PROC2", "PROC3",
-        "BUS_LINE_CD", "PRODUCT_CD", "BTH_DT",
+        "BUS_LINE_CD", "PRDCT_CD", "BTH_DT",
         "BIRTH_TYPE", "BABY_TYPE", "CONTRACT",
         "DSCHRG_STS_CD",
         "PROV_ID", "PROV_TIN", "PROV_FULL_NM", "PROV_STATE"
@@ -297,9 +297,9 @@ def build_newborn_and_nicu_ids(
         .drop("RN_CLAIM")
     )
 
-    # Map PRODUCT→LOB if LOB not present
-    if "LOB" not in claim_base.columns and "PRODUCT_CD" in claim_base.columns:
-        claim_base = claim_base.with_column("LOB", col("PRODUCT_CD"))
+    # Map PRDCT_CD→LOB if LOB not present
+    if "LOB" not in claim_base.columns and "PRDCT_CD" in claim_base.columns:
+        claim_base = claim_base.with_column("LOB", col("PRDCT_CD"))
 
     # Episode-level rollup
     grp_ep = [

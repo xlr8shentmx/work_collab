@@ -193,7 +193,7 @@ MEMBERSHIP_COLUMN_MAP = {
     "GENDER": "GENDER",
     "BTH_DT": "BTH_DT",
     "BUS_LINE_CD": "BUS_LINE_CD",
-    "PRODUCT_CD": "PRODUCT_CD",
+    "PRDCT_CD": "PRDCT_CD",
     "STATE": "STATE"
 }
 
