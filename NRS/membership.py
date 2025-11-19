@@ -49,22 +49,23 @@ def process_membership(
     birth_mid = to_pydate(birth_mid)
     birth_end = to_pydate(birth_end)
 
-    # Load source membership data with MEM_EFF and MEM_EXP
+    # Load source membership data with MEM_EFF_DT and MEM_EXP_DT
     src = (
         session.table(f"FA_MEMBERSHIP_{client}")
         .filter(col("INDV_ID").is_not_null() &
-                col("MEM_EFF").is_not_null() &
-                col("MEM_EXP").is_not_null())
+                col("MEM_EFF_DT").is_not_null() &
+                col("MEM_EXP_DT").is_not_null())
     )
 
-    # Get most recent demographics per member (by MEM_EXP desc)
+    # Get most recent demographics per member (by MEM_EXP_DT desc)
     # This gets the member's demographics from their most recent enrollment period
-    w = Window.partition_by("INDV_ID").order_by(col("MEM_EXP").desc())
+    w = Window.partition_by("INDV_ID").order_by(col("MEM_EXP_DT").desc())
     base = (
         src.with_column("RN", row_number().over(w))
         .filter(col("RN") == 1)
         .select("INDV_ID", "GENDER", "BTH_DT", "BUS_LINE_CD", "PRODUCT_CD", "STATE",
-                "MEM_EFF", "MEM_EXP")
+                col("MEM_EFF_DT").alias("MEM_EFF"),
+                col("MEM_EXP_DT").alias("MEM_EXP"))
         .drop("RN")
     )
 
