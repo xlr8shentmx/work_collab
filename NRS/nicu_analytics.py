@@ -6,7 +6,7 @@ from datetime import date
 from typing import Dict
 from snowflake.snowpark import Session, DataFrame
 from snowflake.snowpark.functions import (
-    col, row_number, when, lit,
+    col, row_number, when, lit, concat,
     min as smin, max as smax, sum as ssum, abs as sabs,
     datediff, first_value, coalesce, length, lag,
     sql_expr, to_char, substring, count_distinct, greatest, least
