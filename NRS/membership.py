@@ -64,8 +64,7 @@ def process_membership(
         src.with_column("RN", row_number().over(w))
         .filter(col("RN") == 1)
         .select("INDV_ID", "GENDER", "BTH_DT", "BUS_LINE_CD", "PRODUCT_CD", "STATE",
-                col("MEM_EFF_DT").alias("MEM_EFF"),
-                col("MEM_EXP_DT").alias("MEM_EXP"))
+                "MEM_EFF_DT", "MEM_EXP_DT")
         .drop("RN")
     )
 
@@ -74,10 +73,10 @@ def process_membership(
     prev_high = to_pydate(prev_high)
 
     # Effective and expiration dates for each period
-    eff_prev = greatest(col("MEM_EFF"), lit(birth_start))
-    exp_prev = least(col("MEM_EXP"), lit(prev_high))
-    eff_curr = greatest(col("MEM_EFF"), lit(birth_mid))
-    exp_curr = least(col("MEM_EXP"), lit(birth_end))
+    eff_prev = greatest(col("MEM_EFF_DT"), lit(birth_start))
+    exp_prev = least(col("MEM_EXP_DT"), lit(prev_high))
+    eff_curr = greatest(col("MEM_EFF_DT"), lit(birth_mid))
+    exp_curr = least(col("MEM_EXP_DT"), lit(birth_end))
 
     # Calculate months of membership for each period
     with_mmyr = (
@@ -142,12 +141,12 @@ def create_eligibility_table(session: Session, client: str, table_config) -> Dat
 
     src = session.table(table_config.membership_output_table(client))
 
-    # Prefer 'Current' study year; use MEM_EXP as tie-breaker if it exists
+    # Prefer 'Current' study year; use MEM_EXP_DT as tie-breaker if it exists
     prefer = when(col("STUDY_YR") == lit("Current"), lit(0)).otherwise(lit(1))
     order_cols = [prefer]
 
-    if "MEM_EXP" in src.columns:
-        order_cols.append(col("MEM_EXP").desc_nulls_last())
+    if "MEM_EXP_DT" in src.columns:
+        order_cols.append(col("MEM_EXP_DT").desc_nulls_last())
 
     w = Window.partition_by("INDV_ID").order_by(*order_cols)
 
