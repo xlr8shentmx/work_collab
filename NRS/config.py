@@ -188,7 +188,8 @@ DISCHARGE_STATUS_CONFIG = DischargeStatusConfig()
 # Column name mappings for different source systems
 MEMBERSHIP_COLUMN_MAP = {
     "INDV_ID": "INDV_ID",
-    "YEARMO": "YEARMO",
+    "MEM_EFF": "MEM_EFF",
+    "MEM_EXP": "MEM_EXP",
     "GENDER": "GENDER",
     "BTH_DT": "BTH_DT",
     "BUS_LINE_CD": "BUS_LINE_CD",
