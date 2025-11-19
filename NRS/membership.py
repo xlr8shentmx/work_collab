@@ -5,8 +5,7 @@ import logging
 from datetime import date, timedelta
 from snowflake.snowpark import Session, DataFrame
 from snowflake.snowpark.functions import (
-    col, row_number, to_date, concat, lit, when,
-    min as smin, max as smax, greatest, least, datediff
+    col, row_number, lit, when, greatest, least, datediff
 )
 from snowflake.snowpark.window import Window
 
@@ -50,33 +49,24 @@ def process_membership(
     birth_mid = to_pydate(birth_mid)
     birth_end = to_pydate(birth_end)
 
-    # Load source membership data
+    # Load source membership data with MEM_EFF and MEM_EXP
     src = (
         session.table(f"FA_MEMBERSHIP_{client}")
-        .filter(col("INDV_ID").is_not_null() & col("YEARMO").is_not_null())
-        # YEARMO like '202401' -> 2024-01-01
-        .with_column("MM_DATE", to_date(concat(col("YEARMO"), lit("01")), "YYYYMMDD"))
+        .filter(col("INDV_ID").is_not_null() &
+                col("MEM_EFF").is_not_null() &
+                col("MEM_EXP").is_not_null())
     )
 
-    # Get most recent demographics per member (by MM_DATE desc)
-    w = Window.partition_by("INDV_ID").order_by(col("MM_DATE").desc())
-    latest = (
+    # Get most recent demographics per member (by MEM_EXP desc)
+    # This gets the member's demographics from their most recent enrollment period
+    w = Window.partition_by("INDV_ID").order_by(col("MEM_EXP").desc())
+    base = (
         src.with_column("RN", row_number().over(w))
         .filter(col("RN") == 1)
-        .select("INDV_ID", "GENDER", "BTH_DT", "BUS_LINE_CD", "PRODUCT_CD", "STATE")
+        .select("INDV_ID", "GENDER", "BTH_DT", "BUS_LINE_CD", "PRODUCT_CD", "STATE",
+                "MEM_EFF", "MEM_EXP")
+        .drop("RN")
     )
-
-    # Calculate coverage window per member
-    cov = (
-        src.group_by("INDV_ID")
-        .agg(
-            smin("MM_DATE").alias("MEM_EFF"),
-            smax("MM_DATE").alias("MEM_EXP")
-        )
-    )
-
-    # Join demographics with coverage
-    base = latest.join(cov, ["INDV_ID"], "inner")
 
     # Calculate period boundaries
     prev_high = birth_mid - timedelta(days=1)  # first window ends day before mid
