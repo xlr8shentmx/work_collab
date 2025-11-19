@@ -63,7 +63,7 @@ def process_membership(
     base = (
         src.with_column("RN", row_number().over(w))
         .filter(col("RN") == 1)
-        .select("INDV_ID", "GENDER", "BTH_DT", "BUS_LINE_CD", "PRODUCT_CD", "STATE",
+        .select("INDV_ID", "GENDER", "BTH_DT", "BUS_LINE_CD", "PRDCT_CD", "STATE",
                 "MEM_EFF_DT", "MEM_EXP_DT")
         .drop("RN")
     )
@@ -158,7 +158,7 @@ def create_eligibility_table(session: Session, client: str, table_config) -> Dat
             col("GENDER"),
             col("BTH_DT"),
             col("BUS_LINE_CD"),
-            col("PRODUCT_CD"),
+            col("PRDCT_CD"),
             col("STATE")
         )
     )

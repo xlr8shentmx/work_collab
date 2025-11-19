@@ -135,7 +135,7 @@ def run_nicu_pipeline(
                     "DIAG1", "DIAG2", "DIAG3", "DIAG4", "DIAG5", "PROC1", "PROC2", "PROC3", "CPTCODE",
                     "DSCHRG_STS_CD", "BILLED", "DRG", "AMTPAID", "POS", "REV_CD",
                     "PROV_ID", "PROV_TIN", "PROV_FULL_NM", "PROV_STATE", "PROV_TYPE",
-                    "GENDER", "BTH_DT", "BUS_LINE_CD", "PRODUCT_CD", "STATE",
+                    "GENDER", "BTH_DT", "BUS_LINE_CD", "PRDCT_CD", "STATE",
                     "NEWBORN_ICD", "NEWBORN_REV", "SINGLE", "TWIN", "MULTIPLE",
                     "NICU_REV", "NICU_MSDRG", "NICU_APRDRG",
                     "CLAIM_TYPE"
