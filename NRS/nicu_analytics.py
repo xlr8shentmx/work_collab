@@ -845,15 +845,7 @@ def prepare_final_export(newborn_df: DataFrame, nicu_df: DataFrame) -> DataFrame
 
     join_keys = ['INDV_ID', 'ADMIT', 'DSCHRG']
 
-    left_cols = set(newborn_df.columns)
-
-    right_cols = [c for c in nicu_df.columns if c not in join_keys and c not in left_cols]
-
-    nicu_df_trimmed = nicu_df.select(
-        *[col(k) for k in join_keys],
-        *[col(c) for c in right_cols]
-    )
-
-    newborns_out = newborn_df.join(nicu_df_trimmed, join_keys, "left")
+    # Simply do a left join - Snowpark will handle column deduplication
+    newborns_out = newborn_df.join(nicu_df, join_keys, "left")
 
     return newborns_out
