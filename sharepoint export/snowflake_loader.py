@@ -152,7 +152,7 @@ class SnowflakeLoader:
     def _create_table_with_date_columns(self, table_name: str, df: pd.DataFrame, date_columns: list) -> None:
         """
         Create table with explicit DATE column types for date columns.
-        All other columns created as VARCHAR for flexibility.
+        Numeric columns created as NUMBER, all other columns as VARCHAR.
         """
         cur = self.conn.cursor()
 
@@ -161,6 +161,12 @@ class SnowflakeLoader:
         for col in df.columns:
             if col in date_columns:
                 column_defs.append(f"{col} DATE")
+            elif pd.api.types.is_numeric_dtype(df[col]):
+                # Check if it's an integer or float
+                if pd.api.types.is_integer_dtype(df[col]):
+                    column_defs.append(f"{col} NUMBER(38,0)")
+                else:
+                    column_defs.append(f"{col} NUMBER(38,6)")
             else:
                 # Use VARCHAR for all other columns - will auto-convert on load
                 column_defs.append(f"{col} VARCHAR")

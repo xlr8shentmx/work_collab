@@ -34,6 +34,9 @@ class ProductTransformer:
         """Explode wide-format data into product-level records"""
         records = []
 
+        # Log available columns for debugging
+        logger.info(f"Available columns in source data: {df.columns.tolist()}")
+
         for _, row in df.iterrows():
             for product_name, category, field, start_col, end_col, status_col in PRODUCT_CONFIGS:
                 # Check if this product is requested
@@ -62,6 +65,11 @@ class ProductTransformer:
 
         df_products = pd.DataFrame(records)
         logger.info(f"Exploded {len(df)} requests into {len(df_products)} product records")
+
+        # Log sample of first record for debugging
+        if len(df_products) > 0:
+            logger.debug(f"Sample record: {df_products.iloc[0].to_dict()}")
+
         return df_products
 
     def _enrich_with_salesforce(self, df: pd.DataFrame, df_salesforce: pd.DataFrame) -> pd.DataFrame:
