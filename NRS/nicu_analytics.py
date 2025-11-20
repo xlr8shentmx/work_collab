@@ -6,7 +6,7 @@ from datetime import date
 from typing import Dict
 from snowflake.snowpark import Session, DataFrame
 from snowflake.snowpark.functions import (
-    col, row_number, when, lit,
+    col, row_number, when, lit, concat,
     min as smin, max as smax, sum as ssum, abs as sabs,
     datediff, first_value, coalesce, length, lag,
     sql_expr, to_char, substring, count_distinct, greatest, least
@@ -784,8 +784,8 @@ def build_nicu_rollup(
     out = (
         base
         .join(all_prof.select(*keys, "ALL_PROFFEE"), keys, "left")
-        .join(man_aggs.select(*keys, "MANAGEABLE_PROFFEE"), keys, "left")
-        .join(crit_aggs.select(*keys, "CRITICAL_CARE_PROFFEE"), keys, "left")
+        .join(man_aggs.select(*keys, "MANAGEABLE_PROFFEE", "MANAGEABLE_SVC_DAYS"), keys, "left")
+        .join(crit_aggs.select(*keys, "CRITICAL_CARE_PROFFEE", "CRITICAL_CARE_DAYS"), keys, "left")
         .join(room.select(*keys, "FACILITY_RM_COST"), keys, "left")
         .join(readm.select(*keys, "READMIT", "READMIT_PAID_AMT", "READMIT_LOS"), keys, "left")
         .join(nas.select(*keys, "NAS"), keys, "left")
@@ -845,15 +845,7 @@ def prepare_final_export(newborn_df: DataFrame, nicu_df: DataFrame) -> DataFrame
 
     join_keys = ['INDV_ID', 'ADMIT', 'DSCHRG']
 
-    left_cols = set(newborn_df.columns)
-
-    right_cols = [c for c in nicu_df.columns if c not in join_keys and c not in left_cols]
-
-    nicu_df_trimmed = nicu_df.select(
-        *[col(k) for k in join_keys],
-        *[col(c) for c in right_cols]
-    )
-
-    newborns_out = newborn_df.join(nicu_df_trimmed, join_keys, "left")
+    # Simply do a left join - Snowpark will handle column deduplication
+    newborns_out = newborn_df.join(nicu_df, join_keys, "left")
 
     return newborns_out
