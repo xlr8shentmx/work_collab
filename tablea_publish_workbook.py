@@ -68,24 +68,25 @@ def publish_workbook():
             # Prepare workbook item
             workbook_item = TSC.WorkbookItem(name=wb_new_filename, project_id=project_id, show_tabs=True)
 
-            # Create ConnectionItem with embedded credentials (v0.38+ API)
-            connection = TSC.ConnectionItem()
-            connection.server_address = sf_server
-            connection.connection_credentials = TSC.ConnectionCredentials(
-                name=sf_user, password=sf_pw, embed=True
-            )
-
-            # Publish workbook using connections parameter
-            # skip_connection_check=True skips server-side connection validation during publish
+            # Step 1: Publish workbook without credentials
             new_workbook = server.workbooks.publish(
                 workbook_item,
                 str(twbx_file_out),
                 mode=TSC.Server.PublishMode.Overwrite,
-                connections=[connection],
                 skip_connection_check=True
             )
+            logger.info(f"Published workbook: {new_workbook.name}")
 
-            logger.info(f"Successfully published workbook: {new_workbook.name}")
+            # Step 2: Update connection credentials after publishing
+            server.workbooks.populate_connections(new_workbook)
+            for conn in new_workbook.connections:
+                conn.username = sf_user
+                conn.password = sf_pw
+                conn.embed_password = True
+                server.workbooks.update_connection(new_workbook, conn)
+                logger.info(f"Updated credentials for connection: {conn.id} ({conn.connection_type})")
+
+            logger.info(f"Successfully published workbook with embedded credentials: {new_workbook.name}")
 
     except Exception as e:
         logger.error(f"Failed to publish workbook: {e}")
