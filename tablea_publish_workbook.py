@@ -25,6 +25,7 @@ tableau_user = os.getenv('TABLEAU_USERNAME')
 tableau_pw = os.getenv('TABLEAU_PW')
 sf_user = os.getenv('SF_USERNAME')
 sf_pw = os.getenv('SF_PW')
+sf_server = os.getenv('SF_SERVER')  # Snowflake server address (e.g., account.snowflakecomputing.com)
 
 tableau_server_url = 'https://orbitbi-tableau.optum.com'
 
@@ -36,6 +37,7 @@ required_env_vars = {
     'TABLEAU_PW': tableau_pw,
     'SF_USERNAME': sf_user,
     'SF_PW': sf_pw,
+    'SF_SERVER': sf_server,
 }
 missing_vars = [key for key, value in required_env_vars.items() if not value]
 if missing_vars:
@@ -68,6 +70,7 @@ def publish_workbook():
 
             # Create ConnectionItem with embedded credentials (v0.38+ API)
             connection = TSC.ConnectionItem()
+            connection.server_address = sf_server
             connection.connection_credentials = TSC.ConnectionCredentials(
                 name=sf_user, password=sf_pw, embed=True
             )
