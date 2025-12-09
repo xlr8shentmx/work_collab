@@ -25,6 +25,7 @@ tableau_user = os.getenv('TABLEAU_USERNAME')
 tableau_pw = os.getenv('TABLEAU_PW')
 sf_user = os.getenv('SF_USERNAME')
 sf_pw = os.getenv('SF_PW')
+sf_server = os.getenv('SF_SERVER')  # Snowflake server address (e.g., account.snowflakecomputing.com)
 
 tableau_server_url = 'https://orbitbi-tableau.optum.com'
 
@@ -36,6 +37,7 @@ required_env_vars = {
     'TABLEAU_PW': tableau_pw,
     'SF_USERNAME': sf_user,
     'SF_PW': sf_pw,
+    'SF_SERVER': sf_server,
 }
 missing_vars = [key for key, value in required_env_vars.items() if not value]
 if missing_vars:
@@ -66,21 +68,25 @@ def publish_workbook():
             # Prepare workbook item
             workbook_item = TSC.WorkbookItem(name=wb_new_filename, project_id=project_id, show_tabs=True)
 
-            # Create ConnectionItem with embedded credentials (v0.38+ API)
-            connection = TSC.ConnectionItem()
-            connection.connection_credentials = TSC.ConnectionCredentials(
-                name=sf_user, password=sf_pw, embed=True
-            )
-
-            # Publish workbook using connections parameter
+            # Step 1: Publish workbook without credentials
             new_workbook = server.workbooks.publish(
                 workbook_item,
                 str(twbx_file_out),
                 mode=TSC.Server.PublishMode.Overwrite,
-                connections=[connection]
+                skip_connection_check=True
             )
+            logger.info(f"Published workbook: {new_workbook.name}")
 
-            logger.info(f"Successfully published workbook: {new_workbook.name}")
+            # Step 2: Update connection credentials after publishing
+            server.workbooks.populate_connections(new_workbook)
+            for conn in new_workbook.connections:
+                conn.username = sf_user
+                conn.password = sf_pw
+                conn.embed_password = True
+                server.workbooks.update_connection(new_workbook, conn)
+                logger.info(f"Updated credentials for connection: {conn.id} ({conn.connection_type})")
+
+            logger.info(f"Successfully published workbook with embedded credentials: {new_workbook.name}")
 
     except Exception as e:
         logger.error(f"Failed to publish workbook: {e}")
