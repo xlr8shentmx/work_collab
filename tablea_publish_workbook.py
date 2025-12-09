@@ -76,11 +76,13 @@ def publish_workbook():
             )
 
             # Publish workbook using connections parameter
+            # skip_connection_check=True skips server-side connection validation during publish
             new_workbook = server.workbooks.publish(
                 workbook_item,
                 str(twbx_file_out),
                 mode=TSC.Server.PublishMode.Overwrite,
-                connections=[connection]
+                connections=[connection],
+                skip_connection_check=True
             )
 
             logger.info(f"Successfully published workbook: {new_workbook.name}")
