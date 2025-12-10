@@ -1,4 +1,0 @@
-# Tableau Workbook Publishing Requirements
-
-# Tableau Server Client for publishing workbooks
-tableauserverclient>=0.38
